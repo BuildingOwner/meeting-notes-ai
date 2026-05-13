@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html,
+  body {
+    background: theme(colors.parchment);
+    color: theme(colors.ink.DEFAULT);
+  }
+
+  body {
+    font-family: theme(fontFamily.text);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: theme(fontFamily.display);
+  }
+}
+
+@layer components {
+  /* Apple primary pill CTA */
+  .btn-primary {
+    @apply inline-flex items-center justify-center px-[22px] py-[11px]
+           rounded-pill bg-primary text-canvas font-text text-body
+           transition-transform duration-150 ease-out;
+  }
+  .btn-primary:hover {
+    @apply bg-primary-focus;
+  }
+  .btn-primary:active {
+    transform: scale(0.95);
+  }
+  .btn-primary:disabled {
+    @apply bg-ink-48 cursor-not-allowed;
+  }
+
+  /* Ghost pill secondary */
+  .btn-secondary {
+    @apply inline-flex items-center justify-center px-[22px] py-[11px]
+           rounded-pill bg-transparent border border-primary text-primary
+           font-text text-body transition-transform duration-150 ease-out;
+  }
+  .btn-secondary:active {
+    transform: scale(0.95);
+  }
+
+  /* Utility card (store-utility-card analog) */
+  .card-utility {
+    @apply bg-canvas border border-hairline rounded-apple-lg p-6;
+  }
+
+  /* Inline action text-link */
+  .link {
+    @apply text-primary hover:underline;
+  }
+}

@@ -1,0 +1,82 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile
+    image: meeting-notes-ai/api:latest
+    ports:
+      # 호스트 loopback 만 — Claude Code (host) 가 plain HTTP MCP 로 접근.
+      # LAN 접근은 caddy 서비스가 TLS 종단 + 리버스 프록시 (38443).
+      - "127.0.0.1:38080:8088"
+    volumes:
+      - ${HOME}/meeting-notes:/data
+    environment:
+      MEETING_NOTES_ROOT: /data
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8088
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      # LAN HTTPS: 192.168.230.104:38443 → caddy 컨테이너 8088 → web:3000(/) + api:8088(/api/*).
+      - "192.168.230.104:38443:8088"
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./infra/caddy/certs:/certs:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    depends_on:
+      - api
+
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
+    image: meeting-notes-ai/web:latest
+    ports:
+      - "127.0.0.1:33000:3000"
+    restart: unless-stopped
+    depends_on:
+      - api
+
+  stt:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile.stt
+    image: meeting-notes-ai/stt:latest
+    volumes:
+      - ${HOME}/meeting-notes:/data
+      # 호스트의 faster-whisper 모델을 컨테이너 /models로 마운트.
+      # 필요시 STT_MODEL_DIR_HOST 환경변수로 경로 변경.
+      - ${STT_MODEL_DIR_HOST:-/home/jwchoi/workspace/2026/docs/temp/whisper-transcribe/model}:/models:ro
+    environment:
+      MEETING_NOTES_ROOT: /data
+      STT_MODEL_PATH: /models/faster-whisper-large-v3
+      STT_DEVICE: cuda
+      STT_GPU_INDEX: ${STT_GPU_INDEX:-1}
+      STT_COMPUTE_TYPE: float16
+      STT_LANGUAGE: ko
+      STT_IDLE_UNLOAD: "1"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${STT_GPU_INDEX:-1}"]
+              capabilities: [gpu]
+    restart: unless-stopped
+    depends_on:
+      - api
+
+# Note: bridge daemon is intentionally NOT in compose.
+# It needs tmux send-keys access to the host's tmux server (meeting-notes-cc session),
+# which is awkward to expose into a container. Run on host:
+#   uv run python -m workers.bridge.bridge
+
+volumes:
+  caddy_data:
+  caddy_config:
