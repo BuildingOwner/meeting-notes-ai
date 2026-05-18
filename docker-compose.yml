@@ -28,6 +28,8 @@ services:
       MCP_PORT: 8088
       NOTION_DEFAULT_TARGET_ID: ${NOTION_DEFAULT_TARGET_ID:-}
       NOTION_DEFAULT_TARGET_KIND: ${NOTION_DEFAULT_TARGET_KIND:-database}
+      # 외부 배포 시 허용할 추가 origin (쉼표 구분, 예: https://my-app.vercel.app)
+      CORS_EXTRA_ORIGINS: ${CORS_EXTRA_ORIGINS:-}
     restart: unless-stopped
 
   web:

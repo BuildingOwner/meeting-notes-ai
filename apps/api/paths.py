@@ -14,4 +14,5 @@ ROOT = Path(
 AUDIO_DIR = ROOT / "audio"
 TRANSCRIPT_DIR = ROOT / "transcripts"
 LOG_DIR = ROOT / "logs"
+UPLOAD_DIR = ROOT / "uploads"
 DB_PATH = Path(os.environ.get("MEETING_NOTES_DB", str(ROOT / "db.sqlite3")))

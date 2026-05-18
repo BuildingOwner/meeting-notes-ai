@@ -7,24 +7,27 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from apps.api.db import connect, init
 from apps.api.mcp_tools import mcp
-from apps.api.paths import AUDIO_DIR, TRANSCRIPT_DIR
+from apps.api.paths import AUDIO_DIR, TRANSCRIPT_DIR, UPLOAD_DIR
 
 ALLOWED_EXTS = {".m4a", ".mp3", ".wav", ".webm", ".ogg", ".flac"}
 ALLOWED_DOC_TYPES = {"meeting", "seminar", "lecture"}
+CHUNK_SIZE = 50 * 1024 * 1024  # 50 MB — Cloudflare Tunnel 무료 100 MB 한도의 절반
 
 init()
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @asynccontextmanager
@@ -33,10 +36,20 @@ async def lifespan(app: FastAPI):
         yield
 
 
+_CORS_BASE = r"https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+)(:\d+)?"
+_CORS_VERCEL = r"https://[\w-]+(\.vercel\.app)"
+# CORS_EXTRA_ORIGINS: 쉼표로 구분된 추가 origin (예: https://your-domain.com)
+_extra = [
+    re.escape(o.strip())
+    for o in os.environ.get("CORS_EXTRA_ORIGINS", "").split(",")
+    if o.strip()
+]
+_CORS_REGEX = "^(" + "|".join([_CORS_BASE, _CORS_VERCEL] + _extra) + ")$"
+
 app = FastAPI(title="meeting-notes-ai", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+)(:\d+)?$",
+    allow_origin_regex=_CORS_REGEX,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -175,3 +188,86 @@ def delete_job(job_id: str) -> dict:
                 pass
     conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
     return {"id": job_id, "deleted": True}
+
+
+@app.post("/uploads", status_code=201)
+def create_upload_session() -> dict:
+    upload_id = str(uuid.uuid4())
+    (UPLOAD_DIR / upload_id).mkdir(parents=True, exist_ok=True)
+    return {"upload_id": upload_id, "chunk_size": CHUNK_SIZE}
+
+
+def _resolve_session_dir(upload_id: str) -> Path:
+    session_dir = (UPLOAD_DIR / upload_id).resolve()
+    if not str(session_dir).startswith(str(UPLOAD_DIR.resolve())):
+        raise HTTPException(400, "invalid upload_id")
+    if not session_dir.exists():
+        raise HTTPException(404, "upload session not found")
+    return session_dir
+
+
+@app.put("/uploads/{upload_id}/chunks/{chunk_index}", status_code=204)
+async def upload_chunk(upload_id: str, chunk_index: int, request: Request) -> None:
+    session_dir = _resolve_session_dir(upload_id)
+    body = await request.body()
+    if not body:
+        raise HTTPException(400, "empty chunk")
+    (session_dir / f"{chunk_index:06d}").write_bytes(body)
+
+
+@app.post("/uploads/{upload_id}/finalize", status_code=201)
+def finalize_upload(
+    upload_id: str,
+    doc_type: str = Form(...),
+    notion_target: str = Form(...),
+    filename: str = Form(...),
+    title: str | None = Form(None),
+) -> dict:
+    session_dir = _resolve_session_dir(upload_id)
+
+    if doc_type not in ALLOWED_DOC_TYPES:
+        raise HTTPException(400, f"unknown doc_type: {doc_type}")
+    try:
+        notion_target_obj = json.loads(notion_target)
+    except json.JSONDecodeError:
+        raise HTTPException(400, "notion_target must be valid JSON")
+    if not isinstance(notion_target_obj, dict) or "id" not in notion_target_obj:
+        raise HTTPException(400, "notion_target must be an object with at least {id}")
+    notion_target_obj.setdefault("kind", "page")
+
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_EXTS:
+        raise HTTPException(400, f"audio extension {ext} not allowed")
+
+    chunk_files = sorted(session_dir.iterdir())
+    if not chunk_files:
+        raise HTTPException(400, "no chunks uploaded")
+
+    job_id = str(uuid.uuid4())
+    audio_path = AUDIO_DIR / f"{job_id}{ext}"
+    try:
+        with audio_path.open("wb") as out:
+            for chunk_file in chunk_files:
+                out.write(chunk_file.read_bytes())
+    finally:
+        shutil.rmtree(session_dir, ignore_errors=True)
+
+    try:
+        conn = connect()
+        conn.execute(
+            "INSERT INTO jobs "
+            "(id, doc_type, title, meta, notion_target, audio_path, status, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'QUEUED', datetime('now', '+7 days'))",
+            (
+                job_id,
+                doc_type,
+                title or None,
+                json.dumps({}, ensure_ascii=False),
+                json.dumps(notion_target_obj, ensure_ascii=False),
+                str(audio_path),
+            ),
+        )
+    except Exception:
+        audio_path.unlink(missing_ok=True)
+        raise
+    return {"id": job_id, "status": "QUEUED", "audio_path": str(audio_path)}

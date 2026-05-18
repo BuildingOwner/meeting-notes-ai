@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { createJob, getConfig } from "@/lib/api";
+import { createJobChunked, getConfig } from "@/lib/api";
 import { AudioRecorder } from "@/components/AudioRecorder";
 
 const DOC_TYPES = [
@@ -34,6 +34,7 @@ export default function UploadPage() {
   const [title, setTitle] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -78,12 +79,16 @@ export default function UploadPage() {
     if (title.trim()) form.set("title", title.trim());
 
     setSubmitting(true);
+    setUploadProgress(null);
     try {
-      const { id } = await createJob(form);
+      const { id } = await createJobChunked(form, (current, total) =>
+        setUploadProgress({ current, total }),
+      );
       router.push(`/jobs/${id}`);
     } catch (e) {
       setError(String(e));
       setSubmitting(false);
+      setUploadProgress(null);
     }
   }
 
@@ -279,8 +284,22 @@ export default function UploadPage() {
 
             {/* Actions — pushed to bottom */}
             <div className="mt-auto pt-2 space-y-2">
-              <button type="submit" disabled={submitting} className="btn-primary w-full justify-center">
-                {submitting ? "업로드 중…" : "업로드 시작"}
+              <button type="submit" disabled={submitting} className="btn-primary w-full justify-center flex-col gap-1">
+                <span>
+                  {submitting
+                    ? uploadProgress
+                      ? `업로드 중… ${uploadProgress.current}/${uploadProgress.total} 청크`
+                      : "연결 중…"
+                    : "업로드 시작"}
+                </span>
+                {uploadProgress && (
+                  <span className="w-full h-1 rounded-full bg-on-primary/20 overflow-hidden">
+                    <span
+                      className="block h-full bg-on-primary/80 rounded-full transition-all duration-200"
+                      style={{ width: `${Math.round((uploadProgress.current / uploadProgress.total) * 100)}%` }}
+                    />
+                  </span>
+                )}
               </button>
               <button type="button" onClick={() => router.back()} className="btn-secondary w-full justify-center">
                 취소
