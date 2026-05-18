@@ -6,6 +6,14 @@ export const API_BASE =
 
 const CHUNK_SIZE = 50 * 1024 * 1024; // 50 MB — 서버 CHUNK_SIZE와 동일
 
+// ngrok 무료 플랜 인터셉트 페이지 우회 헤더 (다른 환경에서는 무시됨)
+function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  return fetch(input, {
+    ...init,
+    headers: { "ngrok-skip-browser-warning": "true", ...init?.headers },
+  });
+}
+
 export type JobStatus =
   | "QUEUED"
   | "TRANSCRIBING"
@@ -35,19 +43,19 @@ export type JobDetail = JobSummary & {
 };
 
 export async function listJobs(): Promise<JobSummary[]> {
-  const res = await fetch(`${API_BASE}/jobs`, { cache: "no-store" });
+  const res = await apiFetch(`${API_BASE}/jobs`, { cache: "no-store" });
   if (!res.ok) throw new Error(`listJobs failed: ${res.status}`);
   return res.json();
 }
 
 export async function getJob(id: string): Promise<JobDetail> {
-  const res = await fetch(`${API_BASE}/jobs/${id}`, { cache: "no-store" });
+  const res = await apiFetch(`${API_BASE}/jobs/${id}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`getJob ${id} failed: ${res.status}`);
   return res.json();
 }
 
 export async function createJob(form: FormData): Promise<{ id: string }> {
-  const res = await fetch(`${API_BASE}/jobs`, {
+  const res = await apiFetch(`${API_BASE}/jobs`, {
     method: "POST",
     body: form,
   });
@@ -67,14 +75,14 @@ export async function createJobChunked(
   const notionTarget = form.get("notion_target") as string;
   const title = form.get("title") as string | null;
 
-  const sessionRes = await fetch(`${API_BASE}/uploads`, { method: "POST" });
+  const sessionRes = await apiFetch(`${API_BASE}/uploads`, { method: "POST" });
   if (!sessionRes.ok) throw new Error(`upload session failed: ${sessionRes.status}`);
   const { upload_id } = await sessionRes.json();
 
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
   for (let i = 0; i < totalChunks; i++) {
     const chunk = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-    const res = await fetch(`${API_BASE}/uploads/${upload_id}/chunks/${i}`, {
+    const res = await apiFetch(`${API_BASE}/uploads/${upload_id}/chunks/${i}`, {
       method: "PUT",
       body: chunk,
       headers: { "Content-Type": "application/octet-stream" },
@@ -89,7 +97,7 @@ export async function createJobChunked(
   finalForm.set("filename", file.name);
   if (title) finalForm.set("title", title);
 
-  const res = await fetch(`${API_BASE}/uploads/${upload_id}/finalize`, {
+  const res = await apiFetch(`${API_BASE}/uploads/${upload_id}/finalize`, {
     method: "POST",
     body: finalForm,
   });
@@ -101,12 +109,12 @@ export async function createJobChunked(
 }
 
 export async function retryJob(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/jobs/${id}/retry`, { method: "POST" });
+  const res = await apiFetch(`${API_BASE}/jobs/${id}/retry`, { method: "POST" });
   if (!res.ok) throw new Error(`retryJob ${id} failed: ${res.status}`);
 }
 
 export async function deleteJob(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/jobs/${id}`, { method: "DELETE" });
+  const res = await apiFetch(`${API_BASE}/jobs/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`deleteJob ${id} failed: ${res.status}`);
 }
 
@@ -115,7 +123,7 @@ export type AppConfig = {
 };
 
 export async function getConfig(): Promise<AppConfig> {
-  const res = await fetch(`${API_BASE}/config`, { cache: "no-store" });
+  const res = await apiFetch(`${API_BASE}/config`, { cache: "no-store" });
   if (!res.ok) throw new Error(`getConfig failed: ${res.status}`);
   return res.json();
 }
