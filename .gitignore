@@ -10,4 +10,5 @@ temp/
 *.log
 .omc
 .claude/settings.local.json
-infra/caddy/certs/
+infra/nginx/certs/
+.playwright-mcp/
