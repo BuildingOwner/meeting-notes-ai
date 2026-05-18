@@ -9,19 +9,20 @@ const STATUS_TEXT: Record<JobStatus, string> = {
   FAILED: "실패",
 };
 
+// Notion uses rounded-full for badges only (not regular buttons)
 const STATUS_CLASS: Record<JobStatus, string> = {
-  QUEUED: "text-ink-48 bg-divider-soft",
-  TRANSCRIBING: "text-ink-48 bg-divider-soft",
-  TRANSCRIBED: "text-ink bg-pearl",
-  PROCESSING: "text-ink bg-pearl",
-  DONE: "text-primary bg-canvas border border-primary/30",
-  FAILED: "text-status-failed bg-canvas border border-status-failed/40",
+  QUEUED: "bg-surface text-stone border border-hairline",
+  TRANSCRIBING: "bg-surface text-slate border border-hairline",
+  TRANSCRIBED: "bg-surface text-ink border border-hairline",
+  PROCESSING: "bg-card-tint-peach text-brand-orange",
+  DONE: "bg-card-tint-mint text-brand-teal",
+  FAILED: "bg-card-tint-rose text-semantic-error",
 };
 
 export function StatusBadge({ status }: { status: JobStatus }) {
   return (
     <span
-      className={`inline-block text-caption px-3 py-1 rounded-pill ${STATUS_CLASS[status]}`}
+      className={`inline-block text-caption px-[10px] py-1 rounded-full ${STATUS_CLASS[status]}`}
     >
       {STATUS_TEXT[status]}
     </span>

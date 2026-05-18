@@ -65,3 +65,13 @@ export async function deleteJob(id: string): Promise<void> {
   const res = await fetch(`${API_BASE}/jobs/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`deleteJob ${id} failed: ${res.status}`);
 }
+
+export type AppConfig = {
+  notion_default_target: { id: string; kind: "database" | "page" } | null;
+};
+
+export async function getConfig(): Promise<AppConfig> {
+  const res = await fetch(`${API_BASE}/config`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`getConfig failed: ${res.status}`);
+  return res.json();
+}

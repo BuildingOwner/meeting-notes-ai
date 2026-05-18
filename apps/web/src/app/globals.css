@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -9,7 +11,7 @@
 
   html,
   body {
-    background: theme(colors.parchment);
+    background: theme(colors.canvas);
     color: theme(colors.ink.DEFAULT);
   }
 
@@ -26,39 +28,36 @@
 }
 
 @layer components {
-  /* Apple primary pill CTA */
   .btn-primary {
-    @apply inline-flex items-center justify-center px-[22px] py-[11px]
-           rounded-pill bg-primary text-canvas font-text text-body
-           transition-transform duration-150 ease-out;
+    @apply inline-flex items-center justify-center px-[18px] py-[10px]
+           rounded-md bg-primary text-on-primary font-text text-button-md
+           transition-colors duration-150 ease-out;
   }
   .btn-primary:hover {
-    @apply bg-primary-focus;
+    @apply bg-primary-pressed;
   }
   .btn-primary:active {
-    transform: scale(0.95);
+    @apply bg-primary-deep;
   }
   .btn-primary:disabled {
-    @apply bg-ink-48 cursor-not-allowed;
+    @apply bg-hairline text-muted cursor-not-allowed;
   }
 
-  /* Ghost pill secondary */
   .btn-secondary {
-    @apply inline-flex items-center justify-center px-[22px] py-[11px]
-           rounded-pill bg-transparent border border-primary text-primary
-           font-text text-body transition-transform duration-150 ease-out;
+    @apply inline-flex items-center justify-center px-[18px] py-[10px]
+           rounded-md bg-canvas border border-hairline-strong text-ink
+           font-text text-button-md transition-colors duration-150 ease-out;
   }
-  .btn-secondary:active {
-    transform: scale(0.95);
+  .btn-secondary:hover {
+    @apply bg-surface;
   }
 
-  /* Utility card (store-utility-card analog) */
   .card-utility {
-    @apply bg-canvas border border-hairline rounded-apple-lg p-6;
+    @apply bg-canvas border border-hairline rounded-lg p-8 shadow-card;
   }
 
-  /* Inline action text-link */
+  /* link-blue, not primary purple */
   .link {
-    @apply text-primary hover:underline;
+    @apply text-link-blue hover:underline;
   }
 }
