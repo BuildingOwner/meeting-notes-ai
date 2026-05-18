@@ -42,7 +42,7 @@
 페이지 URL을 받아 **반드시** 호출:
 
 ```
-meeting_notes.complete(job_id="<받은 ID>", notion_url="<생성된 페이지 URL>")
+meeting_notes.complete(job_id="<받은 ID>", notion_url="<생성된 페이지 URL>", title="<문서에서 확정된 제목>")
 ```
 
 실패 시 (어떤 단계에서든):
