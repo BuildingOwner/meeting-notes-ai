@@ -20,7 +20,7 @@
 [Notion]
 ```
 
-전체 설계 상세는 [docs/design.md](docs/design.md). UI 디자인 토큰은 [DESIGN.md](DESIGN.md) (Apple-style).
+전체 설계 상세는 [docs/design.md](docs/design.md). UI 디자인 토큰은 [DESIGN.md](DESIGN.md).
 
 ## 빠른 시작 (Docker)
 
