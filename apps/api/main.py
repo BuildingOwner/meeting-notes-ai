@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import uuid
 from contextlib import asynccontextmanager
@@ -45,6 +46,17 @@ app.mount("/mcp", mcp.streamable_http_app())
 @app.get("/healthz")
 def healthz() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/config")
+def get_config() -> dict:
+    notion_id = os.environ.get("NOTION_DEFAULT_TARGET_ID", "").strip()
+    notion_kind = os.environ.get("NOTION_DEFAULT_TARGET_KIND", "database").strip()
+    return {
+        "notion_default_target": (
+            {"id": notion_id, "kind": notion_kind} if notion_id else None
+        )
+    }
 
 
 @app.get("/jobs")
@@ -118,7 +130,7 @@ async def create_job(
         (
             job_id,
             doc_type,
-            title or Path(audio_file.filename).stem,
+            title or None,
             json.dumps({}, ensure_ascii=False),
             json.dumps(notion_target_obj, ensure_ascii=False),
             str(audio_path),

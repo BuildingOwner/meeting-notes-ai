@@ -57,8 +57,14 @@ def claim(job_id: str) -> dict[str, Any]:
         (job_id,),
     ).fetchone()
 
+    transcript_path = row["transcript_path"] or ""
+    try:
+        transcript = Path(transcript_path).read_text(encoding="utf-8")
+    except Exception as e:
+        transcript = f"[transcript read error: {e}]"
+
     return {
-        "transcript_path": row["transcript_path"],
+        "transcript": transcript,
         "doc_type": row["doc_type"],
         "title": row["title"],
         "meta": json.loads(row["meta"]) if row["meta"] else {},
@@ -72,13 +78,13 @@ def claim(job_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-def complete(job_id: str, notion_url: str) -> dict[str, bool]:
-    """잡 완료 마킹. status PROCESSING → DONE."""
+def complete(job_id: str, notion_url: str, title: str) -> dict[str, bool]:
+    """잡 완료 마킹. status PROCESSING → DONE. title은 Notion 페이지에 실제 사용된 제목."""
     conn = connect()
     cur = conn.execute(
-        "UPDATE jobs SET status = 'DONE', notion_url = ? "
+        "UPDATE jobs SET status = 'DONE', notion_url = ?, title = ? "
         "WHERE id = ? AND status = 'PROCESSING'",
-        (notion_url, job_id),
+        (notion_url, title, job_id),
     )
     if cur.rowcount == 0:
         raise ValueError(f"job {job_id} not in PROCESSING state")
