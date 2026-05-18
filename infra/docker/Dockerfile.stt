@@ -1,14 +1,71 @@
-# STT 워커 image: faster-whisper + CUDA + cuDNN. GPU 필요.
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS base
+# STT worker: AArch64 + CUDA.
+# PyPI ctranslate2 aarch64 wheel은 CUDA 미포함이므로 Stage 1에서 소스 빌드.
+# GPU: NVIDIA GB10, SM 12.1 (Blackwell).
+# ctranslate2 4.7.1은 legacy FindCUDA를 사용해 SM 12.1을 직접 타겟할 수 없으므로
+# SM 9.0+PTX로 빌드 → CUDA 13.0 드라이버가 SM 12.1용 JIT 컴파일 (첫 실행 후 캐시).
+
+# ── Stage 1: ctranslate2 CUDA 빌드 ──────────────────────────────────────────
+FROM nvcr.io/nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04 AS ct2-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake build-essential git curl software-properties-common \
+    libopenblas-dev \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+       python3.12 python3.12-dev python3.12-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# cmake 3.28 — has legacy FindCUDA; ctranslate2 4.7.1 depends on it
+RUN curl -fsSL https://github.com/Kitware/CMake/releases/download/v3.28.6/cmake-3.28.6-linux-aarch64.sh \
+      -o /tmp/cmake.sh && \
+    chmod +x /tmp/cmake.sh && \
+    /tmp/cmake.sh --skip-license --prefix=/usr/local && \
+    rm /tmp/cmake.sh && \
+    cmake --version
+
+# pip for python3.12
+RUN python3.12 -m ensurepip --upgrade && \
+    python3.12 -m pip install --no-cache-dir pybind11 setuptools wheel
+
+# Clone ctranslate2 matching uv.lock version (4.7.1)
+RUN git clone --depth 1 --branch v4.7.1 \
+    https://github.com/OpenNMT/CTranslate2.git /ct2 && \
+    cd /ct2 && git submodule update --init --recursive
+
+WORKDIR /ct2
+RUN mkdir build && cd build && \
+    cmake .. \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=/usr/local \
+      -DWITH_CUDA=ON \
+      -DWITH_CUDNN=ON \
+      -DCMAKE_CUDA_ARCHITECTURES="90-real;90-ptx" \
+      -DCUDA_ARCH_LIST="9.0+PTX" \
+      -DOPENMP_RUNTIME=NONE \
+      -DWITH_MKL=OFF \
+    && make -j$(nproc) \
+    && make install
+
+# Build Python wheel for cp312 (headers/lib now in /usr/local)
+WORKDIR /ct2/python
+RUN CT2_ROOT=/usr/local python3.12 -m pip wheel . --no-deps -w /tmp/ct2-wheels/
+
+# ── Stage 2: Runtime ─────────────────────────────────────────────────────────
+FROM nvcr.io/nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
 
 ENV PYTHONUNBUFFERED=1 \
     DEBIAN_FRONTEND=noninteractive \
     UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/venv
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3.12 python3.12-venv python3-pip ca-certificates curl \
-      ffmpeg \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+         python3.12 python3.12-venv python3-pip ca-certificates curl ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3.12 /usr/local/bin/python
 
@@ -17,17 +74,28 @@ COPY --from=ghcr.io/astral-sh/uv:0.5.0 /uv /usr/local/bin/uv
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
+# CPU-only PyPI wheel 포함 설치 후 CUDA 빌드본으로 덮어쓴다
 RUN uv sync --frozen --no-dev --no-install-project
+
+# ctranslate2 CUDA 빌드본으로 교체 (PyPI CPU-only wheel 제거)
+COPY --from=ct2-builder /tmp/ct2-wheels/ctranslate2-*.whl /tmp/
+RUN uv pip install --python /opt/venv --force-reinstall --no-deps /tmp/ctranslate2-*.whl \
+    && rm /tmp/ctranslate2-*.whl
+
+# 공유 라이브러리 복사 (Python wheel이 libctranslate2.so.4에 링크됨)
+COPY --from=ct2-builder /usr/local/lib/libctranslate2.so* /usr/local/lib/
+RUN ldconfig
 
 COPY apps ./apps
 COPY workers ./workers
 
 ENV MEETING_NOTES_ROOT=/data \
-    STT_MODEL_PATH=/models/faster-whisper-large-v3 \
+    STT_MODEL_PATH=/models/faster-whisper-large-v3-turbo \
     STT_DEVICE=cuda \
     STT_GPU_INDEX=0 \
     STT_COMPUTE_TYPE=float16 \
     STT_LANGUAGE=ko \
+    STT_IDLE_UNLOAD=1 \
     PYTHONPATH=/app
 
 CMD ["/opt/venv/bin/python", "-m", "workers.stt.worker"]

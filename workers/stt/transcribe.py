@@ -14,9 +14,7 @@ import click
 from faster_whisper import WhisperModel
 from tqdm import tqdm
 
-DEFAULT_MODEL_PATH = (
-    "/home/jwchoi/workspace/2026/docs/temp/whisper-transcribe/model/faster-whisper-large-v3"
-)
+DEFAULT_MODEL_PATH = "/home/hipo1/models/whisper/faster-whisper-large-v3"
 
 
 def fmt_ts(seconds: float) -> str:

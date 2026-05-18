@@ -140,12 +140,19 @@ def load_model() -> WhisperModel:
         f"path={MODEL_PATH}"
     )
     t0 = time.time()
-    model = WhisperModel(
-        MODEL_PATH,
-        device=DEVICE,
-        device_index=GPU_INDEX,
-        compute_type=COMPUTE_TYPE,
-    )
+    try:
+        model = WhisperModel(
+            MODEL_PATH,
+            device=DEVICE,
+            device_index=GPU_INDEX,
+            compute_type=COMPUTE_TYPE,
+        )
+    except (ValueError, RuntimeError) as e:
+        if DEVICE != "cpu":
+            log.warning(f"device={DEVICE} 로드 실패 ({e}), CPU/int8 로 폴백")
+            model = WhisperModel(MODEL_PATH, device="cpu", device_index=0, compute_type="int8")
+        else:
+            raise
     log.info(f"model loaded ({time.time() - t0:.1f}s)")
     return model
 
@@ -198,11 +205,10 @@ def main() -> None:
                 log.error(f"audio missing for {job_id}: {stored}")
                 continue
 
-            if model is None:
-                model = load_model()
-
             transcript_path = TRANSCRIPT_DIR / f"{job_id}.md"
             try:
+                if model is None:
+                    model = load_model()
                 n = transcribe(model, audio_path, transcript_path)
                 mark_done(job_id, transcript_path)
                 log.info(f"done {job_id}: {n} segments → {transcript_path}")
@@ -210,6 +216,7 @@ def main() -> None:
                 tb = traceback.format_exc()
                 mark_failed(job_id, f"{e}\n{tb}")
                 log.exception(f"failed {job_id}: {e}")
+                model = None  # 모델 상태 불확실 → 다음 잡에서 재로드
         except Exception as e:
             log.exception(f"poll loop error: {e}")
             time.sleep(POLL_INTERVAL_S)
