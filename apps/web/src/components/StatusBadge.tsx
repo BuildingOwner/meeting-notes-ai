@@ -22,7 +22,7 @@ const STATUS_CLASS: Record<JobStatus, string> = {
 export function StatusBadge({ status }: { status: JobStatus }) {
   return (
     <span
-      className={`inline-block text-caption px-[10px] py-1 rounded-full ${STATUS_CLASS[status]}`}
+      className={`inline-block text-caption px-[10px] py-1 rounded-full whitespace-nowrap ${STATUS_CLASS[status]}`}
     >
       {STATUS_TEXT[status]}
     </span>
