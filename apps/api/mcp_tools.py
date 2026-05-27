@@ -106,9 +106,10 @@ def fail(job_id: str, reason: str) -> dict[str, bool]:
 
 
 def _load_prompt(doc_type: str) -> str:
-    """prompts/_base.md + prompts/{doc_type}.md 를 이어 붙여 반환."""
+    """prompts/_base.md + prompts/{doc_type}.md + prompts/_typo_gate.md 를 이어 붙여 반환."""
     base = PROMPTS_DIR / "_base.md"
     specific = PROMPTS_DIR / f"{doc_type}.md"
+    typo_gate = PROMPTS_DIR / "_typo_gate.md"
     parts: list[str] = []
     if base.exists():
         parts.append(base.read_text(encoding="utf-8"))
@@ -116,4 +117,6 @@ def _load_prompt(doc_type: str) -> str:
         parts.append(specific.read_text(encoding="utf-8"))
     if not parts:
         return f"[프롬프트 템플릿 미작성: prompts/{doc_type}.md]"
+    if typo_gate.exists():
+        parts.append(typo_gate.read_text(encoding="utf-8"))
     return "\n\n".join(parts)
