@@ -127,8 +127,10 @@ export default function JobsListPage() {
                   href={`/jobs/${j.id}`}
                   className="grid grid-cols-[1fr_auto] md:grid-cols-[1fr_72px_96px_130px] px-4 py-3 hover:bg-surface transition-colors items-center"
                 >
-                  <span className="text-body-sm text-ink font-medium truncate pr-3 flex items-center gap-2">
-                    {j.title || <span className="text-stone">(제목 없음)</span>}
+                  <span className="text-body-sm text-ink font-medium pr-6 flex items-center gap-2 min-w-0">
+                    <span className="truncate">
+                      {j.title || <span className="text-stone">(제목 없음)</span>}
+                    </span>
                     {j.notion_url && (
                       <span className="hidden sm:inline text-caption text-link-blue shrink-0">Notion</span>
                     )}
