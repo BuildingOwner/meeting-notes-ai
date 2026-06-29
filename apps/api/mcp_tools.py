@@ -51,30 +51,43 @@ def claim(job_id: str) -> dict[str, Any]:
             f"job {job_id} in status {row['status']}, not TRANSCRIBED"
         )
 
-    row = conn.execute(
-        "SELECT transcript_path, doc_type, title, meta, notion_target "
-        "FROM jobs WHERE id = ?",
-        (job_id,),
-    ).fetchone()
-
-    transcript_path = row["transcript_path"] or ""
+    # 여기서부터는 이미 status=PROCESSING 으로 커밋된 상태(autocommit). 페이로드 구성이
+    # 실패하면 잡이 PROCESSING 에 영구 고착되므로, 어떤 예외든 FAILED 로 전이시켜 가시화·
+    # retry 가능하게 한 뒤 재던진다. transcript 부재/공백은 "에러 문자열로 위장"하지 않고
+    # 명시 실패 처리 — claude 가 빈 본문으로 잘못된 노트를 만들지 않도록.
     try:
-        transcript = Path(transcript_path).read_text(encoding="utf-8")
-    except Exception as e:
-        transcript = f"[transcript read error: {e}]"
+        row = conn.execute(
+            "SELECT transcript_path, doc_type, title, meta, notion_target "
+            "FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
 
-    return {
-        "transcript": transcript,
-        "doc_type": row["doc_type"],
-        "title": row["title"],
-        "meta": json.loads(row["meta"]) if row["meta"] else {},
-        "notion_target": json.loads(row["notion_target"]),
-        "prompt": _load_prompt(row["doc_type"]),
-        "completion_contract": (
-            "처리 완료 후 반드시 meeting_notes.complete(job_id, notion_url) 호출. "
-            "실패 시 meeting_notes.fail(job_id, reason)."
-        ),
-    }
+        transcript_path = row["transcript_path"] or ""
+        if not transcript_path or not Path(transcript_path).exists():
+            raise ValueError(f"transcript file missing: {transcript_path!r}")
+        transcript = Path(transcript_path).read_text(encoding="utf-8")
+        if not transcript.strip():
+            raise ValueError(f"transcript is empty: {transcript_path!r}")
+
+        return {
+            "transcript": transcript,
+            "doc_type": row["doc_type"],
+            "title": row["title"],
+            "meta": json.loads(row["meta"]) if row["meta"] else {},
+            "notion_target": json.loads(row["notion_target"]),
+            "prompt": _load_prompt(row["doc_type"]),
+            "completion_contract": (
+                "처리 완료 후 반드시 meeting_notes.complete(job_id, notion_url) 호출. "
+                "실패 시 meeting_notes.fail(job_id, reason)."
+            ),
+        }
+    except Exception as e:
+        conn.execute(
+            "UPDATE jobs SET status='FAILED', error=? "
+            "WHERE id = ? AND status = 'PROCESSING'",
+            (f"claim payload error: {e}", job_id),
+        )
+        raise
 
 
 @mcp.tool()

@@ -25,6 +25,7 @@ import logging
 import os
 import time
 import traceback
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from faster_whisper import WhisperModel
@@ -33,6 +34,11 @@ from apps.api.db import connect
 from apps.api.paths import AUDIO_DIR, LOG_DIR, TRANSCRIPT_DIR
 
 POLL_INTERVAL_S = float(os.environ.get("STT_POLL_INTERVAL", "2.0"))
+# 전사 도중 워커 하드크래시(OOM/SIGKILL/재부팅)로 TRANSCRIBING 에 고착된 잡을 회수하는
+# 임계. updated_at(claim 시각)이 이 시간보다 오래된 TRANSCRIBING 만 회수하므로 정상
+# 진행 중인 긴 전사를 가로채지 않도록 충분히 크게 둔다(최장 오디오 전사시간 초과).
+STALE_TRANSCRIBING_MIN = int(os.environ.get("STALE_TRANSCRIBING_MIN", "120"))
+REAP_INTERVAL_S = float(os.environ.get("STT_REAP_INTERVAL", "60"))
 MODEL_PATH = os.environ.get(
     "STT_MODEL_PATH",
     "/home/jwchoi/workspace/2026/docs/temp/whisper-transcribe/model/faster-whisper-large-v3",
@@ -50,7 +56,12 @@ LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.FileHandler(LOG_PATH), logging.StreamHandler()],
+    handlers=[
+        RotatingFileHandler(
+            LOG_PATH, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+        ),
+        logging.StreamHandler(),
+    ],
 )
 log = logging.getLogger("stt-worker")
 
@@ -79,6 +90,19 @@ def claim_queued() -> dict | None:
     if cur.rowcount == 0:
         return None
     return dict(row)
+
+
+def reap_stale_transcribing() -> int:
+    """전사 도중 워커가 통째로 죽어(예외 미발생) TRANSCRIBING 에 고착된 잡을 QUEUED 로
+    되돌려 자동 재전사한다. updated_at 임계 가드로 정상 진행 중인 전사는 건드리지 않음.
+    단건 atomic UPDATE(autocommit)라 멱등."""
+    conn = connect()
+    cur = conn.execute(
+        "UPDATE jobs SET status='QUEUED', error=NULL "
+        "WHERE status='TRANSCRIBING' AND updated_at < datetime('now', ?)",
+        (f"-{STALE_TRANSCRIBING_MIN} minutes",),
+    )
+    return cur.rowcount
 
 
 def mark_done(job_id: str, transcript_path: Path) -> None:
@@ -181,8 +205,23 @@ def main() -> None:
 
     model: WhisperModel | None = None
 
+    # 기동 시 직전 인스턴스가 남긴 TRANSCRIBING 고아를 1회 회수.
+    try:
+        reaped = reap_stale_transcribing()
+        if reaped:
+            log.warning(f"startup reaped {reaped} stale TRANSCRIBING job(s) -> QUEUED")
+    except Exception:
+        log.exception("startup reap error")
+
+    last_reap = time.time()
     while True:
         try:
+            now = time.time()
+            if now - last_reap >= REAP_INTERVAL_S:
+                reaped = reap_stale_transcribing()
+                if reaped:
+                    log.warning(f"reaped {reaped} stale TRANSCRIBING job(s) -> QUEUED")
+                last_reap = now
             job = claim_queued()
             if job is None:
                 if model is not None and IDLE_UNLOAD:

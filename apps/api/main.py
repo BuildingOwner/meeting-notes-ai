@@ -23,6 +23,8 @@ from apps.api.paths import AUDIO_DIR, TRANSCRIPT_DIR, UPLOAD_DIR
 ALLOWED_EXTS = {".m4a", ".mp3", ".wav", ".webm", ".ogg", ".flac"}
 ALLOWED_DOC_TYPES = {"meeting", "seminar", "lecture"}
 CHUNK_SIZE = 50 * 1024 * 1024  # 50 MB — Cloudflare Tunnel 무료 100 MB 한도의 절반
+MAX_CHUNK_BYTES = CHUNK_SIZE + 1024 * 1024  # 청크당 상한(여유 1MB)
+MAX_CHUNKS = 400  # 세션당 청크 수 상한(≈20GB) — 무한 누적/디스크 고갈 방지
 
 init()
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
@@ -135,20 +137,25 @@ async def create_job(
     with audio_path.open("wb") as f:
         shutil.copyfileobj(audio_file.file, f)
 
-    conn = connect()
-    conn.execute(
-        "INSERT INTO jobs "
-        "(id, doc_type, title, meta, notion_target, audio_path, status, expires_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, 'QUEUED', datetime('now', '+7 days'))",
-        (
-            job_id,
-            doc_type,
-            title or None,
-            json.dumps({}, ensure_ascii=False),
-            json.dumps(notion_target_obj, ensure_ascii=False),
-            str(audio_path),
-        ),
-    )
+    # INSERT 실패 시 방금 저장한 오디오를 보상 삭제(고아 파일 방지).
+    try:
+        conn = connect()
+        conn.execute(
+            "INSERT INTO jobs "
+            "(id, doc_type, title, meta, notion_target, audio_path, status, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'QUEUED', datetime('now', '+7 days'))",
+            (
+                job_id,
+                doc_type,
+                title or None,
+                json.dumps({}, ensure_ascii=False),
+                json.dumps(notion_target_obj, ensure_ascii=False),
+                str(audio_path),
+            ),
+        )
+    except Exception:
+        audio_path.unlink(missing_ok=True)
+        raise
     return {"id": job_id, "status": "QUEUED", "audio_path": str(audio_path)}
 
 
@@ -209,9 +216,13 @@ def _resolve_session_dir(upload_id: str) -> Path:
 @app.put("/uploads/{upload_id}/chunks/{chunk_index}", status_code=204)
 async def upload_chunk(upload_id: str, chunk_index: int, request: Request) -> None:
     session_dir = _resolve_session_dir(upload_id)
+    if chunk_index < 0 or chunk_index >= MAX_CHUNKS:
+        raise HTTPException(400, f"chunk_index out of range [0, {MAX_CHUNKS})")
     body = await request.body()
     if not body:
         raise HTTPException(400, "empty chunk")
+    if len(body) > MAX_CHUNK_BYTES:
+        raise HTTPException(413, f"chunk too large (max {MAX_CHUNK_BYTES} bytes)")
     (session_dir / f"{chunk_index:06d}").write_bytes(body)
 
 
@@ -239,18 +250,38 @@ def finalize_upload(
     if ext not in ALLOWED_EXTS:
         raise HTTPException(400, f"audio extension {ext} not allowed")
 
-    chunk_files = sorted(session_dir.iterdir())
-    if not chunk_files:
-        raise HTTPException(400, "no chunks uploaded")
-
-    job_id = str(uuid.uuid4())
-    audio_path = AUDIO_DIR / f"{job_id}{ext}"
+    # 세션을 원자적으로 점유(POSIX rename) — 같은 upload_id 로 들어온 중복/동시 finalize
+    # (네트워크 재시도, 더블클릭)는 두 번째부터 원본 디렉토리가 없어 409 로 거절된다.
+    # → 동일 오디오 중복 잡 생성 + rmtree 경합 동시 차단.
+    finalizing_dir = session_dir.with_name(session_dir.name + ".finalizing")
     try:
-        with audio_path.open("wb") as out:
+        session_dir.rename(finalizing_dir)
+    except OSError:
+        raise HTTPException(409, "finalize already in progress or completed")
+
+    try:
+        chunk_files = sorted(finalizing_dir.iterdir())
+        if not chunk_files:
+            raise HTTPException(400, "no chunks uploaded")
+        # 청크 연속성 검증: 파일명이 000000..N-1 로 빠짐/뒤바뀜 없이 연속이어야 한다.
+        expected = [f"{i:06d}" for i in range(len(chunk_files))]
+        if [c.name for c in chunk_files] != expected:
+            raise HTTPException(
+                400,
+                f"chunk sequence broken: got {[c.name for c in chunk_files]}, "
+                f"expected contiguous 0..{len(chunk_files) - 1}",
+            )
+
+        job_id = str(uuid.uuid4())
+        audio_path = AUDIO_DIR / f"{job_id}{ext}"
+        # 부분 쓰기/크래시 시 손상 파일이 QUEUED 로 등록되지 않도록 .part 로 쓰고 atomic rename.
+        part_path = audio_path.with_name(audio_path.name + ".part")
+        with part_path.open("wb") as out:
             for chunk_file in chunk_files:
                 out.write(chunk_file.read_bytes())
+        part_path.rename(audio_path)
     finally:
-        shutil.rmtree(session_dir, ignore_errors=True)
+        shutil.rmtree(finalizing_dir, ignore_errors=True)
 
     try:
         conn = connect()
