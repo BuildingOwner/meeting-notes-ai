@@ -14,21 +14,37 @@
 
 1. **준비**: `mkdir -p ~/meeting-notes/{audio,transcripts,logs}`
 2. **API + STT (Docker)**: `docker compose up -d --build`
-3. **호스트 tmux + Claude Code**:
+3. **Claude Code 무인 세션 (systemd user service, 자동 재기동)**:
    ```bash
-   tmux new-session -d -s meeting-notes-cc -c "$PWD"
-   tmux send-keys -t meeting-notes-cc:0.0 'claude' Enter
+   systemctl --user enable --now meeting-notes-cc.service
    ```
+   - 유닛: `~/.config/systemd/user/meeting-notes-cc.service` → `scripts/cc-session-keeper.sh`
+     (tmux `meeting-notes-cc` 세션이 없으면 claude 재기동, 크래시 루프 시 백오프).
+   - 기동: `claude --model claude-opus-4-8 --disallowedTools "Bash,Write,Edit,NotebookEdit,WebFetch,Task,Workflow,Skill,mcp__plugin_oh-my-claudecode_t,mcp__playwright"`
+     - `--model claude-opus-4-8`: **필수**. 디폴트 1M-context 는 별도 크레딧을 요구해 Max 한도와 무관하게 막힘.
+     - `--disallowedTools`: `--dangerously-skip-permissions` **대신** 사용(무인이되 무제한 아님).
+       happy-path 도구(meeting-notes/notion/Read)는 `.claude/settings.local.json` 의 `allow`
+       로 무프롬프트 자동승인, 위험 도구(shell·파일쓰기·웹·서브에이전트·브라우저)는 차단 →
+       외부 주입 transcript 의 RCE 경로 봉쇄.
+   - linger 1회 설정(부팅·로그아웃 후 유지): `loginctl enable-linger jwchoi`.
+   - 상태/로그: `systemctl --user status meeting-notes-cc` · `journalctl --user -u meeting-notes-cc -f`.
+   - 수동 기동(디버그용): `tmux new-session -d -s meeting-notes-cc -c "$PWD"` 후 위 플래그로 `claude` 실행.
 4. **Claude Code 안에서 Notion 인증 (최초 1회)**: tmux attach → `/mcp` → plugin:Notion:notion 선택 → 브라우저 OAuth 완료
-5. **bridge 데몬**: `uv run python -m workers.bridge.bridge &`
+5. **bridge 데몬 (systemd user service, 자동 재시작)**:
+   ```bash
+   systemctl --user enable --now meeting-notes-bridge.service
+   ```
+   - 유닛: `~/.config/systemd/user/meeting-notes-bridge.service` (`Restart=always`, 크래시 시 3초 후 재기동).
+   - 부팅/로그아웃 후에도 살리려면 linger 1회 설정: `sudo loginctl enable-linger jwchoi`.
+   - 상태/로그: `systemctl --user status meeting-notes-bridge` · `journalctl --user -u meeting-notes-bridge -f`.
 6. **검증**: `curl http://localhost:8088/healthz` → `{"status":"ok"}`
 
 ## 종료 순서
 
 ```bash
-pkill -f 'workers.bridge.bridge'
+# cc 서비스가 keeper 라 tmux kill-session 만으로는 즉시 재생성됨 → 서비스를 멈춰야 함.
+systemctl --user stop meeting-notes-cc.service meeting-notes-bridge.service   # 영구 정지면 disable 추가
 docker compose down
-tmux kill-session -t meeting-notes-cc
 ```
 
 DB 와 audio 는 `~/meeting-notes/` 에 남으므로 데이터 손실 없음.
