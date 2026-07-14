@@ -140,6 +140,15 @@ def transcribe(
     for seg in segments:
         lines.append(f"[{fmt_ts(seg.start)}] {seg.text.strip()}")
 
+    # 디코더가 샘플을 한 개도 못 뽑은 경우(절단·손상 오디오: 예) m4a STSZ atom truncated).
+    # 빈 transcript 를 TRANSCRIBED 로 넘기면 원인이 "빈 트랜스크립트"로 위장되고 잡이
+    # 파이프라인 뒤쪽에서 죽는다. 여기서 명시 실패시켜 오디오 문제로 드러낸다.
+    if not lines:
+        raise ValueError(
+            f"오디오 디코드 실패: segments=0, duration={info.duration:.1f}s "
+            f"({audio_path.name}) — 업로드 절단/파일 손상 의심"
+        )
+
     header = [
         f"# {audio_path.name} (STT)",
         "",
@@ -164,19 +173,16 @@ def load_model() -> WhisperModel:
         f"path={MODEL_PATH}"
     )
     t0 = time.time()
-    try:
-        model = WhisperModel(
-            MODEL_PATH,
-            device=DEVICE,
-            device_index=GPU_INDEX,
-            compute_type=COMPUTE_TYPE,
-        )
-    except (ValueError, RuntimeError) as e:
-        if DEVICE != "cpu":
-            log.warning(f"device={DEVICE} 로드 실패 ({e}), CPU/int8 로 폴백")
-            model = WhisperModel(MODEL_PATH, device="cpu", device_index=0, compute_type="int8")
-        else:
-            raise
+    # CPU 폴백을 두지 않는다. aarch64 에선 ctranslate2 가 CPU int8 을 지원하지 않아
+    # 폴백 자체가 ValueError 로 재폭발하며, 그 과정에서 원인 예외(예: "no CUDA-capable
+    # device is detected")를 덮어써 실패 사유를 위장한다. 설령 폴백이 동작해도 장시간
+    # 오디오를 CPU 로 전사하는 것은 비현실적이고, GPU 소실을 조용히 감춘다.
+    model = WhisperModel(
+        MODEL_PATH,
+        device=DEVICE,
+        device_index=GPU_INDEX,
+        compute_type=COMPUTE_TYPE,
+    )
     log.info(f"model loaded ({time.time() - t0:.1f}s)")
     return model
 
