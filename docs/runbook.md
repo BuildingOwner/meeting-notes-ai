@@ -20,12 +20,52 @@
    ```
    - 유닛: `~/.config/systemd/user/meeting-notes-cc.service` → `scripts/cc-session-keeper.sh`
      (tmux `meeting-notes-cc` 세션이 없으면 claude 재기동, 크래시 루프 시 백오프).
-   - 기동: `claude --model claude-opus-4-8 --disallowedTools "Bash,Write,Edit,NotebookEdit,WebFetch,Task,Workflow,Skill,mcp__plugin_oh-my-claudecode_t,mcp__playwright"`
+   - 기동 플래그·토큰 주입은 전부 `scripts/cc-launch.sh` 에 있다(keeper 는 이 스크립트를
+     tmux 안에서 실행만 한다). 권한은 **세션 한정 CLI 플래그**로만 건다 — 프로젝트
+     `.claude/settings.json` 에 deny 를 넣으면 개발자 세션까지 함께 묶인다.
      - `--model claude-opus-4-8`: **필수**. 디폴트 1M-context 는 별도 크레딧을 요구해 Max 한도와 무관하게 막힘.
-     - `--disallowedTools`: `--dangerously-skip-permissions` **대신** 사용(무인이되 무제한 아님).
-       happy-path 도구(meeting-notes/notion/Read)는 `.claude/settings.local.json` 의 `allow`
-       로 무프롬프트 자동승인, 위험 도구(shell·파일쓰기·웹·서브에이전트·브라우저)는 차단 →
-       외부 주입 transcript 의 RCE 경로 봉쇄.
+     - `--effort medium`: 명세가 고정된 구조화 작문이라 추론 예산을 늘려도 수익이 작다
+       (xhigh 는 잡당 12분). 유효값: `low|medium|high|xhigh|max`.
+     - `--permission-mode dontAsk`: allow 에 없어 프롬프트가 뜰 도구를 **무프롬프트 자동 거부**.
+       무인 세션이 권한 모달에 고착하는 것과, bridge 의 `send-keys` Enter 가 그 모달을
+       우발 승인하는 경로를 함께 없앤다. `--dangerously-skip-permissions` 는 쓰지 않는다.
+     - `--disallowedTools Bash …`: `dontAsk` 도 **read-only Bash(`cat`·`grep`·`find` 등)는
+       모든 모드에서 프롬프트 없이 실행**한다(구성 불가). bare 이름 deny 는 도구를 모델
+       컨텍스트에서 아예 제거하므로 그 구멍(토큰·크레덴셜 파일 읽기)까지 막는다.
+     - `--allowedTools` 는 최소 집합. `meeting_notes.claim` 이 transcript·prompt·meta 를
+       인라인 반환하므로 Bash/Write 없이 처리된다.
+     - `Read` 는 read-only 라 **애초에 승인 대상이 아니다**(`dontAsk` 가 거부하지 않고,
+       allow 로 범위를 좁힐 수도 없다 — deny 가 allow 를 이기므로 "이것만 허용"은 표현 불가).
+       따라서 민감 경로만 deny 로 막는다: `Read(~/.claude/**)`, `Read(~/.config/**)`,
+       `Read(~/.ssh/**)`, `Read(//**/.env)`.
+     - ⚠️ `--allowedTools`/`--disallowedTools` 는 variadic → **반드시 공백 구분**.
+       `"Bash,Write,…"` 처럼 콤마 한 문자열을 주면 이름이 `"Bash,Write,…"` 인 도구 1개로
+       해석돼 **아무것도 차단되지 않는다**(2026-07-10 이전 설정의 실제 버그).
+     - 검증법: 동일 플래그로 임시 세션을 띄워 `Bash로 echo hi`, `Read ~/.claude/settings.json`,
+       `Read ./.env` 가 모두 거부되고 일반 파일 Read 만 되는지 확인.
+   - **인증(장수명 토큰, 최초 1회)**: 무인 세션이 대화형(VSCode 등) 세션과 같은
+     `~/.claude/.credentials.json` 을 공유하면 refresh-token rotation 으로 유휴 인스턴스가
+     `401 Invalid authentication credentials` 로 로그아웃되어 잡이 `TRANSCRIBED` 에서
+     멈춘다. 이를 막으려 무인 세션은 전용 장수명 토큰을 쓴다:
+     ```bash
+     claude setup-token   # 브라우저 OAuth, Max 구독 사용 → 토큰 출력
+     ```
+     출력 토큰을 `~/.config/meeting-notes-cc.env`(권한 600, git 커밋 금지) 의
+     `CLAUDE_CODE_OAUTH_TOKEN=` 뒤에 넣고 재기동:
+     ```bash
+     systemctl --user daemon-reload && systemctl --user restart meeting-notes-cc
+     ```
+     `cc-launch.sh` 가 이 파일을 **자기 프로세스 안에서 읽어** 환경변수로만 claude 에 넘긴다.
+     systemd `EnvironmentFile` 이나 `tmux new-session -e` 로 넘기지 않는데, 그러면 토큰이
+     keeper env(→ tmux 서버가 전역 env 로 복사 → 머신의 모든 tmux 세션이 상속)나
+     tmux 클라이언트 argv 에 남기 때문이다. `/proc/<pid>/cmdline` 은 누구나 읽을 수 있고
+     (`-r--r--r--`), `/proc/<pid>/environ` 은 소유자만 읽는다(`-r--------`).
+     값이 비면 claude 는 공유 creds 로 동작한다.
+     확인:
+     ```bash
+     tmux show-environment -g | grep CLAUDE_CODE_OAUTH_TOKEN   # 결과 없어야 정상
+     grep -l sk-ant-oat01 /proc/*/cmdline                      # 결과 없어야 정상
+     ```
    - linger 1회 설정(부팅·로그아웃 후 유지): `loginctl enable-linger jwchoi`.
    - 상태/로그: `systemctl --user status meeting-notes-cc` · `journalctl --user -u meeting-notes-cc -f`.
    - 수동 기동(디버그용): `tmux new-session -d -s meeting-notes-cc -c "$PWD"` 후 위 플래그로 `claude` 실행.

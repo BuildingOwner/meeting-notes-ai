@@ -32,8 +32,9 @@ mkdir -p ~/meeting-notes/{audio,transcripts,logs}
 docker compose up -d --build
 
 # 3. (호스트에서) bridge 데몬과 tmux Claude Code 세션 띄우기
-tmux new-session -d -s meeting-notes-cc -c "$PWD"
-tmux send-keys -t meeting-notes-cc:0.0 'claude' Enter
+#    반드시 런처로 띄운다. 맨 `claude` 는 권한 플래그가 없어 무인 세션이 외부 주입
+#    transcript 로 shell·파일쓰기를 실행할 수 있다(docs/runbook.md 참조).
+tmux new-session -d -s meeting-notes-cc -c "$PWD" ./scripts/cc-launch.sh
 uv run python -m workers.bridge.bridge &
 
 # 4. 동작 확인
@@ -63,8 +64,8 @@ uv run python -m apps.api.server &
 # 2. STT 워커 (GPU 필요)
 uv run python -m workers.stt.worker &
 # 3. tmux Claude Code (선행: ~/.claude 설정 + Notion MCP 인증)
-tmux new-session -d -s meeting-notes-cc -c "$PWD"
-tmux send-keys -t meeting-notes-cc:0.0 'claude' Enter
+#    cc-launch.sh 가 권한 플래그와 인증 토큰 주입을 담당한다.
+tmux new-session -d -s meeting-notes-cc -c "$PWD" ./scripts/cc-launch.sh
 # 4. bridge
 uv run python -m workers.bridge.bridge &
 ```
